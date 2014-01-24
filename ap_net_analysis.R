@@ -3,14 +3,24 @@
 # networks.
 # Under construction.
 
+# load libraries
+library(hgu133plus2.db)
+library(antiProfiles)
+library(plyr)
+library(glasso)
+library(reactome.db)
+library(RCytoscape)
+library(ppcor)
+
 # loads data into the workspace as global vars 
 # c_exprs and c_condition
 get_colon_data = function(){
-  library(hgu133plus2.db)
+  #library(hgu133plus2.db)
   load("apData_gpl570.rda")
   idx = pData(apData_gpl570)$Tissue == "colon"
   c_exprs <<- exprs(apData_gpl570)[,idx]
-  c_condition <<- pData(apData_gpl570)[idx,]$Status
+  #c_condition <<- pData(apData_gpl570)[idx,]$Status
+  c_condition <<- as.numeric(pData(apData_gpl570)[idx,]$SubType == "colorectal_cancer")
 }
 
 # Takes expression data in, indexed by probe_ids
@@ -18,13 +28,13 @@ get_colon_data = function(){
 # collapsing the multiple probes that match to one
 # entrez ids via the median
 convert_probes_entrez = function(expr_data){
-  library(hgu133plus2.db)
+  #library(hgu133plus2.db)
   
   probe_ids = rownames(expr_data)
   entrez_ids = hgu133plus2ENTREZID[probe_ids]
   entrez_ids = toTable(entrez_ids)
   
-  library(plyr)
+  #library(plyr)
   
   dfed = as.data.frame(expr_data)
   dfed = dfed[entrez_ids$probe_id,]
@@ -55,7 +65,7 @@ convert_probes_entrez2 = function(probeSetExpr){
 }
 
 convert_ap_probes = function(ap){
-  library(hgu133plus2.db)
+  #library(hgu133plus2.db)
   probes = getProbesetIds(ap)
   gids = toTable(hgu133plus2ENTREZID[getProbesetIds(ap)])
   gids = gids$gene_id
@@ -67,7 +77,7 @@ convert_ap_probes = function(ap){
 # under construction
 # does not work
 convert_probes_2 = function(expr_data){
-  library(hgu133plus2.db)
+  #library(hgu133plus2.db)
   
   probe_ids = rownames(expr_data)
   entrez_ids = hgu133plus2ENTREZID[probe_ids]
@@ -115,7 +125,6 @@ gene_correlation = function(data, threshold=.9){
 # getProbesetIds(ap)
 # getNormalRegions(ap)
 build_ap = function(data, status){
-  library(antiProfiles)
   stats = apStats(data, status)
   ap = buildAntiProfile(stats, tissueSpec=FALSE)
   return(ap)
@@ -306,24 +315,21 @@ plot_differences = function(controlg, cancerg, rels, ap){
   
 }
 
-# loads the colon data
 # prints gets several pathways, and runs glasso on them
 # prints the results to a chart
 sample_paths_glasso = function(){
-  library(antiProfiles)
-  library(glasso)
-  library(hgu133plus2.db)
-  library(reactome.db)
+  #library(antiProfiles)
+  #library(glasso)
+  #library(hgu133plus2.db)
+  #library(reactome.db)
   
   #get_colon_data()	# should use setup_colon_ap_data instead
-
+  
   # pathways list:
   # apoptosis, degredation of the extracellular matrix, growth hormone receptor signaling (immune -> cytokine),
   # signaling by EGFR, Signalling by NOTCH1
   sample_paths = c("169911", "1474228", "982772", "177929", "2644602")
   
-  library(reactome.db)
-    
   # get ap stuff...  # should use setup_colon_ap_data instead
   #ap = build_ap(c_exprs, c_condition)
   #ap_entrez_ids = convert_ap_probes(ap)
@@ -363,6 +369,74 @@ sample_paths_glasso = function(){
 }
 
 
+fit_glasso_to_path = function(pathid){
+  control_samples = c_condition == 0
+  cancer_samples = c_condition == 1
+  #data = convert_probes_entrez(data)
+  data = load_path_exprs_subset(pathid)
+  data = convert_probes_entrez(data)
+  r = rel_from_pathid_slim2(pathid, data)
+  rel = r[[1]]
+  
+  zero_partial_corrs = r[[2]]
+  dapgl = ap_entrez_ids
+  dapgl = dapgl %in% rownames(data)
+  dapgl = ap_entrez_ids[dapgl]
+  print("subset found")
+
+  cov_control = data[,control_samples]
+  cov_cancer = data[,cancer_samples]
+  print("subsets made")
+
+  cov_control = var(t(cov_control))
+  cov_cancer = var(t(cov_cancer))
+  print("cov done")  
+    
+  controlg = glasso(cov_control, rho=0.001, zero=zero_partial_corrs)    
+  cancerg = glasso(cov_cancer, rho=0.001, zero=zero_partial_corrs)
+  show("glasso done")
+
+  #return(c(controlg, cancerg, dapgl))
+  return(list(controlg, cancerg, dapgl))
+}
+
+fit_pcor_to_path = function(pathid){
+  control_samples = c_condition == 0
+  cancer_samples = c_condition == 1
+
+  data = load_path_exprs_subset(pathid)
+  data = convert_probes_entrez(data)
+
+  dapgl = ap_entrez_ids %in% rownames(data)
+  dapgl = ap_entrez_ids[dapgl]
+
+  
+  am = get_graph_am(pathid)
+  #con_pc = get_partial_correlations(data[,control_samples], am)
+  can_pc = get_partial_correlations(data[,cancer_samples], am)
+  
+  return(list(con_pc, can_pc, dapgl, am, data))
+}
+
+fit_pcor_lm_to_path = function(pathid){
+  control_samples = c_condition == 0
+  cancer_samples = c_condition == 1
+
+  data = load_path_exprs_subset(pathid)
+  data = convert_probes_entrez(data)
+
+  dapgl = ap_entrez_ids %in% rownames(data)
+  dapgl = ap_entrez_ids[dapgl]
+
+  
+  am = get_graph_am(pathid)
+  con_pc = get_partial_correlations_lm(data[,control_samples], am)
+  can_pc = get_partial_correlations_lm(data[,cancer_samples], am)
+  
+  return(list(con_pc, can_pc, dapgl, am, data))
+}
+
+
 # Finds and returns all pathways that contain genes from the
 # ap_entrez_genes list
 # under construction...
@@ -399,6 +473,8 @@ setup_colon_ap_data = function(){
   get_colon_data()
   ap <<- build_ap(c_exprs, c_condition)
   ap_entrez_ids <<- convert_ap_probes(ap)
+  sample_paths <<- c("169911", "1474228", "982772", "177929", "2644602")
+  # sample paths found by manually querying the file "reactome_path_ids.txt"
 }
 
 # gets an adjacency matrix for a reactome.db network
@@ -442,12 +518,366 @@ graph_ap_stats = function(am, ap_genes){
 }
 
 # plots the network using igraph library
-# TODO: look at pathview
-# color nodes differently
+# note: igraph doesn't seem to plot nicely (at least not on my computer)
 plot_graph = function(am){
   library(igraph)
   g = graph.adjacency(am)
-  plot(g, vertex.size=0, edge.arrow.size=0)
+  plot(g, vertex.size=1, edge.arrow.size=.1, layout=layout.fruchterman.reingold)
+  #plot(g)
 }
 
 
+# has problems with taking the inverse of a singular matrix to find the partial
+# covariance when using the pcor.test method
+get_partial_correlations = function(exprs, am){
+  pcm = am #partial correlation matrix
+  pcm[lower.tri(pcm)] = 0 # make lower triangle 0 to prevent work duplication
+  z = 0
+  for (i in 1:length(rownames(am))){
+    print("==================================")
+    neighbors = which(pcm[i,]!=0, arr.ind=T)
+    eye = diag(length(neighbors))
+    #print(neighbors)
+    if (length(neighbors) == 0){
+      #print("skip")
+      next
+    }
+
+    if (length(neighbors) > 2){
+      #print("many")
+      #print(neighbors)
+      for (j in 1:length(neighbors)){
+        #print(i)
+        #print(neighbors[j])
+        r = try(pcor.test(t(exprs[i,]), t(exprs[neighbors[j],]), t(exprs[neighbors[1-eye[j,] == 1],]), method="spearman"))
+        #print(r)
+        if (class(r) == "try-error"){
+          print("error_caught")
+          z = z + 1
+          pcm[i,neighbors[j]] = 0
+        } else {
+          pcm[i,neighbors[j]] = r$estimate
+        }
+      }
+
+    } else if (length(neighbors) == 2) {
+      print("two")
+      r = pcor(t(exprs[append(i, neighbors),]))
+      pcm[i, neighbors[1]] = r$estimate[1,2]
+      pcm[i, neighbors[2]] = r$estimate[1,3]
+    
+    } else {
+      print("one")
+      #print(i)
+      #print(neighbors[1])
+      r = cor(exprs[i,], exprs[neighbors[1],])
+      pcm[i, neighbors[1]] = r
+    }
+  }
+  print(z)
+  return(pcm)
+}
+
+
+get_partial_correlations_lm = function(exprs, am){
+  pcm = am #partial correlation matrix
+  pcm[lower.tri(pcm)] = 0 # make lower triangle 0 to prevent work duplication
+
+  dfexprs = as.data.frame(t(exprs))
+  
+  z = 0
+  for (i in 1:length(rownames(am))){
+    print("==================================")
+    
+    name_i = rownames(am)[i]
+    links = which(pcm[i,]!=0, arr.ind=T)
+    
+    if (length(links) == 0){
+      next
+    }
+    
+    for (j in 1:length(links)){
+      name_j = rownames(am)[links[j]]
+      
+      print("---")
+      print(name_i)
+      print(name_j)
+      print("===")
+      
+      i_neighbors = am[i,]
+      i_neighbors[j] = 0
+      i_neighbors = rownames(am)[i_neighbors==1]
+      
+      j_neighbors = am[j,]
+      j_neighbors[i] = 0
+      j_neighbors = rownames(am)[j_neighbors==1]
+      
+      i_residuals = dfexprs[name_i]
+      j_residuals = dfexprs[name_j]
+      
+      if (length(i_neighbors) > 0){
+        i_form = paste('`', name_i, '` ~ `', paste(i_neighbors, sep='', collapse='` + `'), '`', sep='')
+        i_m = lm(i_form, dfexprs)
+        i_residuals = i_m$residuals
+      }
+      
+      if (length(j_neighbors) > 0){
+        j_form = paste('`', name_j, '` ~ `', paste(j_neighbors, sep='', collapse='` + `'), '`', sep='')
+        j_m = lm(j_form, dfexprs)
+        j_residuals = j_m$residuals
+      }
+      
+      pcm[name_i, name_j] = cor(i_residuals, j_residuals)[1]
+      
+    }
+  }  
+  return(pcm)
+}
+
+
+plot_cytoscape = function(am, controlg, cancerg, ap_ids){
+  #library(RCytoscape)
+  g <- as(am, "graphNEL")
+  g <- initEdgeAttribute(g, "weight", "numeric", 1.0)
+  #try(cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=TRUE))
+  cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=TRUE)
+  #g <- initEdgeAttribute(g, "weight", "numeric", 1.0)
+  #cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=FALSE)
+
+  print("Base Graph Sent")
+  displayGraph(cw)
+
+  layoutNetwork(cw, layout.name="force-directed")
+  # check getLayoutNames(cw) for other options
+  redraw(cw)
+
+  print("Graph layed-out")
+
+  # how to set the color of the nodes...
+  #> setNodeAttributesDirect(cw, "gft", "numeric", rownames(a), 1*(rownames(a)> "5000"))
+  #> gftcolors = c('#00AA00', '#00FF00')
+  #> setNodeColorRule(cw, 'gft', c(0, 1), gftcolors, mode='interpolate')
+  #redraw(cw)
+
+
+  # Ideal graph:
+  # Nodes are squares or circles if the are ap or not
+  # nodes colored by delta of expression levels
+  # links are colored based on the delta of strength of the positive or negative correlation
+  # second graph
+  # simpler
+  # still squares and circles for nodes via ap or not
+  # node color based on expression level
+  # link color based on strength of positive or negative correlation
+  
+  #i = which(am!=0, arr.ind=T)
+  #am[i] # gets values
+  
+  # get indicies
+  a = am
+  a[lower.tri(a)] = 0 # gets rid of idicies where row>col
+  i = which(a!=0, arr.ind=T) # gets indicies
+  i = i[order(i[,1], i[,2]),] # sorts by row ascending order
+  
+  edge_names = getAllEdges(cw)
+  edge_names = rev(edge_names) # sorted by row ascending
+
+  # set the background color to white
+  setDefaultBackgroundColor(cw, "#FFFFFF", "default")
+  
+  # set node shapes
+  #print(ap_ids)
+  #print(getNodeShapes(cw))
+  setNodeShapeDirect(cw, ap_ids, rep('diamond', length(ap_ids)))
+  
+  print("AP genes made diamond")
+  
+  # Set edge colors
+  #setEdgeColorDirect(cw, edge_names, "#FF0000")
+  #setEdgeColorDirect(cw, edge_names[controlg$wi[i] > 0], "#00FF00")
+  #setEdgeColorDirect(cw, edge_names[controlg$wi[i] == 0], "#000000")
+  #redraw(cw)
+  
+  setEdgeAttributesDirect(cw, "strength", "numeric", edge_names, round(10*controlg$wi[i]))
+  control_points = c(-20.0, 0.0, 20.0); # TODO: These are probably not the best points
+  colors = c("#FF0000", "#000000", "#00FF00");
+  setEdgeColorRule(cw, "strength", control_points, colors, mode="interpolate")
+  #setEdgeColorRule(cw, "strength", c(-1, 1), c("#FF0000", "#00FF00"), mode="interpolate")
+  
+  displayGraph(cw)
+  redraw(cw)
+  print("Edges Colored")
+  
+  
+  # set edge widths
+  #setEdgeLineWidthDirect(cw, edge_names, abs(controlg$wi[i]))
+      
+  print("Edge Widths Set")
+  
+}
+
+
+plot_cy_single = function(am, glasso_out, ap_ids){
+  #library(RCytoscape)
+  g <- as(am, "graphNEL")
+  g <- initEdgeAttribute(g, "weight", "numeric", 1.0)
+  #try(cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=TRUE))
+  cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=TRUE)
+  #g <- initEdgeAttribute(g, "weight", "numeric", 1.0)
+  #cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=FALSE)
+
+  print("Base Graph Sent")
+  displayGraph(cw)
+
+  layoutNetwork(cw, layout.name="force-directed")
+  # check getLayoutNames(cw) for other options
+  redraw(cw)
+
+  print("Graph layed-out")
+
+  # how to set the color of the nodes...
+  #> setNodeAttributesDirect(cw, "gft", "numeric", rownames(a), 1*(rownames(a)> "5000"))
+  #> gftcolors = c('#00AA00', '#00FF00')
+  #> setNodeColorRule(cw, 'gft', c(0, 1), gftcolors, mode='interpolate')
+  #redraw(cw)
+
+
+  # Ideal graph:
+  # Nodes are squares or circles if the are ap or not
+  # nodes colored by delta of expression levels
+  # links are colored based on the delta of strength of the positive or negative correlation
+  # second graph
+  # simpler
+  # still squares and circles for nodes via ap or not
+  # node color based on expression level
+  # link color based on strength of positive or negative correlation
+  
+  #i = which(am!=0, arr.ind=T)
+  #am[i] # gets values
+  
+  # get indicies
+  a = am
+  a[lower.tri(a)] = 0 # gets rid of idicies where row>col
+  i = which(a!=0, arr.ind=T) # gets indicies
+  i = i[order(i[,1], i[,2]),] # sorts by row ascending order
+  
+  edge_names = getAllEdges(cw)
+  edge_names = rev(edge_names) # sorted by row ascending
+
+  # set the background color to white
+  setDefaultBackgroundColor(cw, "#FFFFFF", "default")
+  
+  # set node shapes
+  #print(ap_ids)
+  #print(getNodeShapes(cw))
+  setNodeShapeDirect(cw, ap_ids, rep('diamond', length(ap_ids)))
+  
+  print("AP genes made diamond")
+  
+  # Set edge colors
+  #setEdgeColorDirect(cw, edge_names, "#FF0000")
+  #setEdgeColorDirect(cw, edge_names[controlg$wi[i] > 0], "#00FF00")
+  #setEdgeColorDirect(cw, edge_names[controlg$wi[i] == 0], "#000000")
+  #redraw(cw)
+  
+  setEdgeAttributesDirect(cw, "strength", "numeric", edge_names, round(10*glasso_out$wi[i]))
+  control_points = c(-20.0, 0.0, 20.0); # TODO: These are probably not the best points
+  colors = c("#FF0000", "#000000", "#00FF00");
+  setEdgeColorRule(cw, "strength", control_points, colors, mode="interpolate")
+  #setEdgeColorRule(cw, "strength", c(-1, 1), c("#FF0000", "#00FF00"), mode="interpolate")
+  
+  displayGraph(cw)
+  redraw(cw)
+  print("Edges Colored")
+  
+  
+  # set edge widths
+  #setEdgeLineWidthDirect(cw, edge_names, abs(controlg$wi[i]))
+      
+  print("Edge Widths Set")
+  
+}
+
+plot_cy_pcor = function(am, pcm, ap_ids){
+  #library(RCytoscape)
+  g <- as(am, "graphNEL")
+  g <- initEdgeAttribute(g, "weight", "numeric", 1.0)
+  #try(cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=TRUE))
+  cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=TRUE)
+  #g <- initEdgeAttribute(g, "weight", "numeric", 1.0)
+  #cw <- new.CytoscapeWindow('ap_net', graph=g, overwriteWindow=FALSE)
+
+  print("Base Graph Sent")
+  displayGraph(cw)
+
+  layoutNetwork(cw, layout.name="force-directed")
+  # check getLayoutNames(cw) for other options
+  redraw(cw)
+
+  print("Graph layed-out")
+
+  # how to set the color of the nodes...
+  #> setNodeAttributesDirect(cw, "gft", "numeric", rownames(a), 1*(rownames(a)> "5000"))
+  #> gftcolors = c('#00AA00', '#00FF00')
+  #> setNodeColorRule(cw, 'gft', c(0, 1), gftcolors, mode='interpolate')
+  #redraw(cw)
+
+
+  # Ideal graph:
+  # Nodes are squares or circles if the are ap or not
+  # nodes colored by delta of expression levels
+  # links are colored based on the delta of strength of the positive or negative correlation
+  # second graph
+  # simpler
+  # still squares and circles for nodes via ap or not
+  # node color based on expression level
+  # link color based on strength of positive or negative correlation
+  
+  #i = which(am!=0, arr.ind=T)
+  #am[i] # gets values
+  
+  # get indicies
+  a = am
+  a[lower.tri(a)] = 0 # gets rid of idicies where row>col
+  i = which(a!=0, arr.ind=T) # gets indicies
+  i = i[order(i[,1], i[,2]),] # sorts by row ascending order
+  
+  edge_names = getAllEdges(cw)
+  edge_names = rev(edge_names) # sorted by row ascending
+
+  # set the background color to white
+  setDefaultBackgroundColor(cw, "#FFFFFF", "default")
+  
+  # set node shapes
+  #print(ap_ids)
+  #print(getNodeShapes(cw))
+  setNodeShapeDirect(cw, ap_ids, rep('diamond', length(ap_ids)))
+  
+  print("AP genes made diamond")
+  
+  # Set edge colors
+  #setEdgeColorDirect(cw, edge_names, "#FF0000")
+  #setEdgeColorDirect(cw, edge_names[controlg$wi[i] > 0], "#00FF00")
+  #setEdgeColorDirect(cw, edge_names[controlg$wi[i] == 0], "#000000")
+  #redraw(cw)
+  
+  setEdgeAttributesDirect(cw, "strength", "numeric", edge_names, pcm[i])
+  control_points = c(-.10, 0.0, .10); # TODO: These are probably not the best points
+  colors = c("#FF0000", "#000000", "#00FF00");
+  setEdgeColorRule(cw, "strength", control_points, colors, mode="interpolate")
+  #setEdgeColorRule(cw, "strength", c(-1, 1), c("#FF0000", "#00FF00"), mode="interpolate")
+  
+  displayGraph(cw)
+  redraw(cw)
+  print("Edges Colored")
+  
+  
+  # set edge widths
+  #setEdgeLineWidthDirect(cw, edge_names, abs(controlg$wi[i]))
+      
+  print("Edge Widths Set")
+  
+}
+
+
+ 
